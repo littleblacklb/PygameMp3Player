@@ -1,0 +1,17 @@
+# IntelliJ project files
+.idea
+*.iml
+out
+gen
+
+idea
+# music test
+music
+lyric
+temp
+# pyinstaller
+dist
+build
+
+# Project exclude paths
+/venv/
