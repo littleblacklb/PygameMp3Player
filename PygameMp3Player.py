@@ -16,12 +16,13 @@ import eyed3
 import pygame
 
 from Pinyin2Hanzi import DefaultDagParams, dag
+from Theme import Theme
 
 SCREEN_W, SCREEN_H = 1024, 768
 
 
 class PygameMp3Player(object):
-    def __init__(self, temp_path: str, music_path: str, lyric_path: str, isEmpty: bool):
+    def __init__(self, temp_path: str, music_path: str, lyric_path: str, isEmpty: bool, skinFile: str = None):
         """
         FrameWork初始化
         :param music_path: 音乐目录
@@ -49,6 +50,10 @@ class PygameMp3Player(object):
         """
         var初始化
         """
+        if skinFile is None:
+            self.theme = Theme()
+        else:
+            self.theme = Theme(skinFile)
         self.manager = PlayManager(self)
         self.manager.isEmpty = isEmpty
         self.tempPath = temp_path
@@ -57,7 +62,7 @@ class PygameMp3Player(object):
         简单的枚举当前文件夹寻找mp3文件(当然不支持递归深入查找)
         """
         pattern = re.compile("^.*.mp3$")
-        t0 = time.time() * 1000
+        t0 = time.time()
         for name in os.listdir(music_path):
             if pattern.match(name) is not None:  # 匹配是否为mp3
                 lrcFile, lrcTranFile = None, None
@@ -69,12 +74,11 @@ class PygameMp3Player(object):
                 musicObj = Music(self, music_path + "/" + name, lrcFile, lrcTranFile)
                 self.manager.musicLst.append(musicObj)
                 print("load: ", musicObj)
-        print("用时", time.time() * 1000 - t0, "ms")
+        print("用时", (time.time() - t0) * 1000, "ms")
         """
         UI初始化
         """
         playUI = PlayUI(self)
-        # self.uiLst = [MusicListUI(self, playUI), playUI, TestUI(self)]
         self.uiLst = [MusicListUI(self, playUI), playUI]
 
     def show(self):
@@ -130,7 +134,7 @@ class Button(object):
 
 
 class PlayBar(object):
-    def __init__(self, fWork: PygameMp3Player, lineColor=(102, 102, 102), hasPlayedColor=(204, 204, 204)):
+    def __init__(self, fWork: PygameMp3Player):
         self.fw = fWork
         self.status = 0
         self.x0, self.x1, = 125, 900
@@ -139,19 +143,20 @@ class PlayBar(object):
         self.y = SCREEN_H - 180
         self.rect = pygame.Rect(self.x0, self.y - 16, self.x1 - self.x0, 32)
         self.sec_all = 0
-        self.cl_line = lineColor
-        self.cl_played = hasPlayedColor
+        self.clr_font_left = self.fw.theme.playUi_color_playBar_font_left
+        self.clr_font_right = self.fw.theme.playUi_color_playBar_font_right
+        self.clr_line = self.fw.theme.playUi_color_playBar_line
+        self.clr_played = self.fw.theme.playUi_color_playBar_played
 
     def show(self, scr: pygame.SurfaceType):
         # pygame.draw.rect(scr, (102, 204, 255), self.rect)  # 这个不用我解释了吧...
-        pygame.draw.line(scr, self.cl_line, (self.x0, self.y), (self.x1, self.y), 3)
+        pygame.draw.line(scr, self.clr_line, (self.x0, self.y), (self.x1, self.y), 3)
         self.display_played_logic(scr)
-
-        img = self.fw.font18.render(convert_to_minute(self.fw.manager.timeManager.ms_played // 1000),
-                                    True, self.cl_played)
-        scr.blit(img, (self.x0 - 65, self.y - 16))
-        img = self.fw.font18.render(convert_to_minute(self.sec_all), True, self.cl_line)
-        scr.blit(img, (self.x1 + 25, self.y - 16))
+        textSurface = self.fw.font18.render(convert_to_minute(self.fw.manager.timeManager.ms_played // 1000),
+                                    True, self.clr_font_left)
+        scr.blit(textSurface, (self.x0 - 65, self.y - 16))
+        textSurface = self.fw.font18.render(convert_to_minute(self.sec_all), True, self.clr_font_right)
+        scr.blit(textSurface, (self.x1 + 25, self.y - 16))
 
     def display_played_logic(self, scr):
         if self.fw.manager.isPlay or self.status:  # 更新ms_hasPlayed进度, status是用来更新已经拖动进度后的
@@ -160,7 +165,7 @@ class PlayBar(object):
         if self.fw.manager.currMusic.src is not None:  # 防止被除数为0
             sec_played = self.fw.manager.timeManager.ms_played / 1000
             self.playedW = self.w // (self.sec_all / sec_played)
-            pygame.draw.line(scr, self.cl_played, (self.x0, self.y), (self.x0 + self.playedW, self.y), 3)
+            pygame.draw.line(scr, self.clr_played, (self.x0, self.y), (self.x0 + self.playedW, self.y), 3)
 
     def mouse_down(self, pos, btn):
         if self.rect.collidepoint(pos):
@@ -193,8 +198,7 @@ class PlayBar(object):
 
 
 class VolumeBar(object):
-    def __init__(self, fWork: PygameMp3Player, fontColor=(204, 204, 204), lineColor=(102, 102, 102),
-                 hasPlayedColor=(204, 204, 204)):
+    def __init__(self, fWork: PygameMp3Player):
         self.fw = fWork
         self.status = 0
         self.x0, self.x1, = SCREEN_W - 215, SCREEN_W - 115
@@ -203,16 +207,16 @@ class VolumeBar(object):
         self.currW = 100
         self.vol = 100
         self.rect = pygame.Rect(self.x0, self.y - 16, self.x1 - self.x0, 32)
-        self.cl_font = fontColor
-        self.cl_line = lineColor
-        self.cl_currVol = hasPlayedColor
+        self.clr_font = self.fw.theme.playUi_color_volBar_font
+        self.clr_line = self.fw.theme.playUi_color_volBar_line
+        self.clr_currVol = self.fw.theme.playUi_color_volBar_coverLine
 
     def show(self, scr: pygame.SurfaceType):
         # pygame.draw.rect(scr, (102, 204, 255), self.rect) # 这个不用我解释了吧...
-        pygame.draw.line(scr, self.cl_line, (self.x0, self.y), (self.x1, self.y), 3)
+        pygame.draw.line(scr, self.clr_line, (self.x0, self.y), (self.x1, self.y), 3)
         if self.currW != 0:  # 如果音量为0 就不画
-            pygame.draw.line(scr, self.cl_currVol, (self.x0, self.y), (self.x0 + self.currW, self.y), 3)
-        img = self.fw.font12.render(str(self.vol) + '%', True, self.cl_font)
+            pygame.draw.line(scr, self.clr_currVol, (self.x0, self.y), (self.x0 + self.currW, self.y), 3)
+        img = self.fw.font12.render(str(self.vol) + '%', True, self.clr_font)
         scr.blit(img, (self.x0 - 12, self.y - 16))
 
     def mouse_down(self, pos, btn):
@@ -695,11 +699,7 @@ class ThemeManager(object):
     pass
 
 
-class Theme(object):
-    pass
-
-
-""" _
+"""
 CONTROL
 """
 
@@ -719,11 +719,16 @@ class MusicList(object):
         self.btn = Button(self.fw, get_resource_path("img/btn/play/pause.bmp"), SCREEN_W - 75, self.y, self.btn_func)
 
     def show(self, scr: pygame.SurfaceType):
-        img = self.fw.font32.render(self.index, True, (55, 55, 50))
+        theme = self.fw.theme
+        # number
+        img = self.fw.font32.render(self.index, True, theme.musicListUi_color_number)
         scr.blit(img, (30, self.y))
-        img = self.fw.font25.render(self.text + self.music.title, True, (255, 255, 255))
+        # title
+        img = self.fw.font25.render(self.text + self.music.title, True, theme.musicListUi_color_title)
         scr.blit(img, (90, self.y - 5))
-        img = self.fw.font12.render(self.music.artist + " - " + self.music.album, True, (102, 102, 102))
+        # album and singer
+        img = self.fw.font12.render(self.music.artist + " - " + self.music.album, True,
+                                    theme.musicListUi_color_subtitle)
         scr.blit(img, (90, self.y + 25))
         self.btn.show(scr)
 
@@ -769,13 +774,13 @@ class PlayInfoDisplay(object):
         self.album = self.fw.manager.currMusic.album
 
     def show(self, scr):
-        img = self.fw.font32.render(self.title, True, (255, 255, 255))
-        w = img.get_width()
-        scr.blit(img, (SCREEN_W / 2 - w / 2 + 192, SCREEN_H // 2 - 250))
+        textSurface = self.fw.font32.render(self.title, True, self.fw.theme.playUi_color_title)
+        w = textSurface.get_width()
+        scr.blit(textSurface, (SCREEN_W / 2 - w / 2 + 192, SCREEN_H // 2 - 250))
 
-        img = self.fw.font20.render(self.artist + "-" + self.album, True, (102, 102, 102))
-        w = img.get_width()
-        scr.blit(img, (SCREEN_W / 2 - w / 2 + 192, SCREEN_H // 2 - 200))
+        textSurface = self.fw.font20.render(self.artist + "-" + self.album, True, self.fw.theme.playUi_color_subtitle)
+        w = textSurface.get_width()
+        scr.blit(textSurface, (SCREEN_W / 2 - w / 2 + 192, SCREEN_H // 2 - 200))
         scr.blit(self.cover, (50, 150))
 
 
@@ -971,6 +976,7 @@ class MusicListUI(UI):
             self.MUSIC_OBJ_LST = self.musicListObjLst[:]
 
     def show(self, scr: pygame.SurfaceType):
+        scr.fill(self.fw.theme.musicListUi_color_bg)
         self.scrollBar.show(scr)
         self.searchBar.show(scr)
         # 比较两个对象是否相同，如果不相同那么就是换歌了
@@ -1085,12 +1091,9 @@ class PlayUI(UI):
             Button(self.fw, get_resource_path("img/btn/order/0.png"), SCREEN_W // 2 - 450, SCREEN_H - 120,
                    self.btn_func_order,
                    (255, 255, 255)))
-        # self.btnLst.append(  # 5 for test
-        #     Button(self.fw, get_resource_path("img/btn/order/0.png"), 233, 233,
-        #            self.btn_func_test,
-        #            (255, 255, 255)))
 
     def show(self, scr: pygame.SurfaceType):
+        scr.fill(self.fw.theme.playUi_color_bg)
         if pygame.mixer_music.get_busy() == 0 and self.fw.manager.isPlay:
             self.fw.manager.play_next(self.orderNum, False)
             self.update()
@@ -1156,23 +1159,6 @@ class PlayUI(UI):
     def btn_func_test(self):
         self.fw.status = UiEnum.testUi
 
-    # def get_next(self, human_opera=False):
-    #     """
-    #     获取下一首歌
-    #     :param human_opera: 是否为人为操作
-    #     :return: 下一首歌的下标
-    #     """
-    #     newIndex = -1
-    #     if self.orderNum == 0 or human_opera:  # order
-    #         newIndex = (self.fw.manager.musicIndex + 1) % len(self.fw.manager.musicLst)
-    #     elif self.orderNum == 1:  # loop
-    #         newIndex = self.fw.manager.musicIndex
-    #     else:  # random
-    #         while newIndex != self.fw.manager.musicIndex:  # 如果随机后是重复的, 则重新随机
-    #             newIndex = random.randint(0, len(self.fw.manager.musicLst) - 1)
-    #             print("rand", newIndex)
-    #     return newIndex
-
     def btn_change(self):
         self.btnLst[2].__init__(self.fw, get_playPause_pic(self.fw.manager.isPlay), SCREEN_W // 2 - 30, SCREEN_H - 120,
                                 self.btn_func_pp)
@@ -1208,15 +1194,14 @@ class LyricDisplayObj(object):
     Lyric显示的单行对象
     """
 
-    def __init__(self, fWork: PygameMp3Player, clicked_func, lyric: Lyric, x, y,
-                 color_main=(115, 115, 115), color_sub=(85, 85, 85),
-                 color_main_sel=(204, 204, 204), color_sub_sel=(204, 204, 204)):
+    def __init__(self, fWork: PygameMp3Player, clicked_func, lyric: Lyric, x, y):
         self.fw = fWork
         self.lyric = lyric
-        self.img_text = fWork.font20.render(lyric.text, True, color_main)
-        self.img_text_selected = fWork.font20.render(lyric.text, True, color_main_sel)
-        self.img_text_tran = fWork.font12.render(lyric.text_tran, True, color_sub)
-        self.img_text_tran_selected = fWork.font12.render(lyric.text_tran, True, color_sub_sel)
+        self.img_text = fWork.font20.render(lyric.text, True, self.fw.theme.playUi_color_lyric_main_unfocused)
+        self.img_text_selected = fWork.font20.render(lyric.text, True, self.fw.theme.playUi_color_lyric_main_focus)
+        self.img_text_tran = fWork.font12.render(lyric.text_tran, True, self.fw.theme.playUi_color_lyric_sub_unfocused)
+        self.img_text_tran_selected = fWork.font12.render(lyric.text_tran, True,
+                                                          self.fw.theme.playUi_color_lyric_sub_focus)
         self.x, self.y = x - self.img_text.get_width() / 2, y
         self.x_tran = x - self.img_text_tran.get_width() / 2
         text_tran_h = self.img_text_tran.get_height()
@@ -1442,13 +1427,12 @@ lyricPath = "lyric"
 
 
 def _do_ini_init(fName):
-    f = open(ININAME, 'w', 'UTF-8')
-    config.add_section("folder")
-    config.set("folder", "temp", tempPath)
-    config.set("folder", "music", musicPath)
-    config.set("folder", "lyric", lyricPath)
-    config.write(f)
-    f.close()
+    with open(ININAME, 'w', 'UTF-8') as destF:
+        config.add_section("folder")
+        config.set("folder", "temp", tempPath)
+        config.set("folder", "music", musicPath)
+        config.set("folder", "lyric", lyricPath)
+        config.write(destF)
 
 
 if not os.path.exists(ININAME):  # ini 不存在

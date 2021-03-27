@@ -1,0 +1,40 @@
+{
+  "musicListUi": {
+    "color": {
+      "background": "0, 0, 0",
+      "number": "55, 55, 50",
+      "title": "255, 255, 255",
+      "subtitle": "102, 102, 102"
+    }
+  },
+  "playUi": {
+    "color": {
+      "background": "0, 0, 0",
+      "title": "255, 255, 255",
+      "subtitle": "102, 102, 102",
+      "playBar": {
+        "font": {
+          "left": "102, 102, 102",
+          "right": "102, 102, 102"
+        },
+        "line": "102, 102, 102",
+        "played": "204, 204, 204"
+      },
+      "lyric": {
+        "main": {
+          "focus": "204, 204, 204",
+          "unfocused": "115, 115, 115"
+        },
+        "sub": {
+          "focus": "204, 204, 204",
+          "unfocused": "85, 85, 85"
+        }
+      },
+      "volBar": {
+        "font": "204, 204, 204",
+        "line": "102, 102, 102",
+        "coverLine": "204, 204, 204"
+      }
+    }
+  }
+}
