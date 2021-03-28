@@ -54,32 +54,34 @@ class PygameMp3Player(object):
             self.theme = Theme()
         else:
             self.theme = Theme(skinFile)
+        self.music_path = music_path
+        self.lyric_path = lyric_path
         self.manager = PlayManager(self)
         self.manager.isEmpty = isEmpty
         self.tempPath = temp_path
-        self.status = UiEnum.musicListUi
-        """
-        简单的枚举当前文件夹寻找mp3文件(当然不支持递归深入查找)
-        """
-        pattern = re.compile("^.*.mp3$")
-        t0 = time.time()
-        for name in os.listdir(music_path):
-            if pattern.match(name) is not None:  # 匹配是否为mp3
-                lrcFile, lrcTranFile = None, None
-                lrcName = name.split('.')[0]
-                if os.path.exists(lyric_path + "/" + lrcName + ".lrc"):
-                    lrcFile = lyric_path + "/" + lrcName + ".lrc"
-                    if os.path.exists(lyric_path + "/" + lrcName + "_tran.lrc"):
-                        lrcTranFile = lyric_path + "/" + lrcName + "_tran.lrc"
-                musicObj = Music(self, music_path + "/" + name, lrcFile, lrcTranFile)
-                self.manager.musicLst.append(musicObj)
-                print("load: ", musicObj)
-        print("用时", (time.time() - t0) * 1000, "ms")
+        self.status = UiEnum.beginUi
+        # """
+        # 简单的枚举当前文件夹寻找mp3文件(当然不支持递归深入查找)
+        # """
+        # pattern = re.compile("^.*.mp3$")
+        # t0 = time.time()
+        # for name in os.listdir(music_path):
+        #     if pattern.match(name) is not None:  # 匹配是否为mp3
+        #         lrcFile, lrcTranFile = None, None
+        #         lrcName = name.split('.')[0]
+        #         if os.path.exists(lyric_path + "/" + lrcName + ".lrc"):
+        #             lrcFile = lyric_path + "/" + lrcName + ".lrc"
+        #             if os.path.exists(lyric_path + "/" + lrcName + "_tran.lrc"):
+        #                 lrcTranFile = lyric_path + "/" + lrcName + "_tran.lrc"
+        #         musicObj = Music(self, music_path + "/" + name, lrcFile, lrcTranFile)
+        #         self.manager.musicLst.append(musicObj)
+        #         print("load: ", musicObj)
+        # print("用时", (time.time() - t0) * 1000, "ms")
         """
         UI初始化
         """
         playUI = PlayUI(self)
-        self.uiLst = [MusicListUI(self, playUI), playUI]
+        self.uiLst = [BeginUI(self), MusicListUI(self, playUI), playUI]
 
     def show(self):
         self.scr.fill((0, 0, 0))
@@ -102,13 +104,20 @@ class PygameMp3Player(object):
         self.uiLst[self.status.value].key_down(key)
 
 
-# CONTROL
+"""
+CONTROL
+"""
+
+
 class Button(object):
-    def __init__(self, fWork: PygameMp3Player, picFile, x, y, btn_func, colorKey=(0, 0, 0), scale=None):
-        if scale is not None:
-            self.img: pygame.SurfaceType = pygame.transform.scale(pygame.image.load(picFile), scale)
+    def __init__(self, fWork: PygameMp3Player, pic, x, y, btn_func, param=None, colorKey=(0, 0, 0), scale=None):
+        if isinstance(pic, pygame.SurfaceType):
+            self.img = pic
         else:
-            self.img: pygame.SurfaceType = pygame.image.load(picFile)
+            if scale is not None:
+                self.img: pygame.SurfaceType = pygame.transform.scale(pygame.image.load(pic), scale)
+            else:
+                self.img: pygame.SurfaceType = pygame.image.load(pic)
         self.fw = fWork
         self.img.set_colorkey(colorKey)
         self.w, self.h = self.img.get_width(), self.img.get_height()
@@ -117,6 +126,7 @@ class Button(object):
         self.rect = pygame.Rect(self.x, self.y, self.w, self.h)
         self.status = 0
         self.btn_func = btn_func
+        self.param = param
 
     def show(self, scr: pygame.SurfaceType):
         scr.blit(self.img, (self.x, self.y), (self.status * self.rect.w, 0, self.rect.w, self.rect.h))
@@ -130,7 +140,10 @@ class Button(object):
             self.status = 0
             return
         self.status = 0
-        self.btn_func()
+        if self.param is None:
+            self.btn_func()
+        else:
+            self.btn_func(self.param)
 
 
 class PlayBar(object):
@@ -153,7 +166,7 @@ class PlayBar(object):
         pygame.draw.line(scr, self.clr_line, (self.x0, self.y), (self.x1, self.y), 3)
         self.display_played_logic(scr)
         textSurface = self.fw.font18.render(convert_to_minute(self.fw.manager.timeManager.ms_played // 1000),
-                                    True, self.clr_font_left)
+                                            True, self.clr_font_left)
         scr.blit(textSurface, (self.x0 - 65, self.y - 16))
         textSurface = self.fw.font18.render(convert_to_minute(self.sec_all), True, self.clr_font_right)
         scr.blit(textSurface, (self.x1 + 25, self.y - 16))
@@ -891,9 +904,11 @@ UI
 
 
 class UiEnum(int, Enum):
-    musicListUi = 0
-    playUi = 1
-    testUi = 2
+    beginUi = 0
+    musicListUi = 1
+    playUi = 2
+    networkUi = 3
+    themeUi = 4
 
 
 class UI(object):
@@ -925,14 +940,32 @@ class UI(object):
             b.show(scr)
 
 
-class TestUI(UI):
+class BeginUI(UI):
     def __init__(self, fWork: PygameMp3Player):
         super().__init__(fWork)
         self.btnLst.append(
-            Button(self.fw, get_resource_path("img/btn/play/up.bmp"), SCREEN_W // 2 - 20, 30, self.btn_func_test))
+            Button(self.fw, get_resource_path("img/btn/beginUI/network.png"), SCREEN_W // 2 - 250 - 64,
+                   SCREEN_H // 2 - 64,
+                   self.btn_func_jump, param=UiEnum.networkUi, scale=(128, 128)))
+        self.btnLst.append(
+            Button(self.fw, get_resource_path("img/btn/beginUI/music.png"), SCREEN_W // 2 - 64, SCREEN_H // 2 - 64,
+                   self.btn_func_jump,
+                   param=UiEnum.musicListUi, scale=(128, 128)))
+        self.btnLst.append(
+            Button(self.fw, get_resource_path("img/btn/beginUI/theme.png"), SCREEN_W // 2 + 250 - 64,
+                   SCREEN_H // 2 - 64, self.btn_func_jump,
+                   param=UiEnum.themeUi, scale=(128, 128)))
 
-    def btn_func_test(self):
-        self.fw.status = UiEnum.playUi
+    def btn_func_jump(self, status):
+        if status == UiEnum.musicListUi:
+            ui: MusicListUI
+            ui = self.fw.uiLst[UiEnum.musicListUi]
+            ui.init()
+            self.fw.status = UiEnum.musicListUi
+        elif status == UiEnum.networkUi:
+            print("networkUI")
+        elif status == UiEnum.themeUi:
+            print("skinUi")
 
 
 class MusicListUI(UI):
@@ -954,6 +987,10 @@ class MusicListUI(UI):
         self.MUSIC_OBJ_LST = []  # 用于替换musicListObjLst
         self.PAGE_ALL = self.page_all
         self.temp_page_all = 0
+        self.is_init = False
+        self.btnLst.append(
+            Button(self.fw, pygame.transform.rotate(pygame.image.load(get_resource_path("img/btn/play/up.bmp")), 90),
+                   27, 10, self.func_goto_beginUi))
         # LIST INIT
         i = 0
         # 这么繁琐的方式是因为有一个特殊的MusicList(当前正在播放)
@@ -971,12 +1008,37 @@ class MusicListUI(UI):
                 y += 80
                 i += 1
             self.musicListObjLst.append(page)
-            a: MusicList
             # self.btnLst.append(page_btn)
             self.MUSIC_OBJ_LST = self.musicListObjLst[:]
 
+    def init(self):
+        """
+        load music
+        """
+        """
+        简单的枚举当前文件夹寻找mp3文件(当然不支持递归深入查找)
+        """
+        if self.is_init:
+            return
+        pattern = re.compile("^.*.mp3$")
+        t0 = time.time()
+        for name in os.listdir(self.fw.music_path):
+            if pattern.match(name) is not None:  # 匹配是否为mp3
+                lrcFile, lrcTranFile = None, None
+                lrcName = name.split('.')[0]
+                if os.path.exists(self.fw.lyric_path + "/" + lrcName + ".lrc"):
+                    lrcFile = self.fw.lyric_path + "/" + lrcName + ".lrc"
+                    if os.path.exists(self.fw.lyric_path + "/" + lrcName + "_tran.lrc"):
+                        lrcTranFile = self.fw.lyric_path + "/" + lrcName + "_tran.lrc"
+                musicObj = Music(self.fw, self.fw.music_path + "/" + name, lrcFile, lrcTranFile)
+                self.fw.manager.musicLst.append(musicObj)
+                print("load: ", musicObj)
+        print("用时", (time.time() - t0) * 1000, "ms")
+        self.is_init = True
+
     def show(self, scr: pygame.SurfaceType):
         scr.fill(self.fw.theme.musicListUi_color_bg)
+        super().show(scr)
         self.scrollBar.show(scr)
         self.searchBar.show(scr)
         # 比较两个对象是否相同，如果不相同那么就是换歌了
@@ -996,6 +1058,7 @@ class MusicListUI(UI):
         self.searchBar.mouse_motion(pos)
 
     def mouse_down(self, pos, btn):
+        super().mouse_down(pos, btn)
         if btn == 1:  # 左键
             self.specMusicListObj.btn.mouse_down(pos)
             for listObj in self.musicListObjLst[self.page_curr]:
@@ -1013,6 +1076,7 @@ class MusicListUI(UI):
             self.scrollBar.currPage = self.page_curr
 
     def mouse_up(self, pos, btn):
+        super().mouse_up(pos, btn)
         if btn == 1:  # 左键
             self.specMusicListObj.btn.mouse_up(pos)
             for listObj in self.musicListObjLst[self.page_curr]:
@@ -1062,6 +1126,9 @@ class MusicListUI(UI):
             self.musicListObjLst = searchedLst
             self.scrollBar.set_new_page(page_all)
             print("搜索 done!")
+
+    def func_goto_beginUi(self):
+        self.fw.status = UiEnum.beginUi
 
 
 class PlayUI(UI):
