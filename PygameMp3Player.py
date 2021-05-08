@@ -81,7 +81,15 @@ class PygameMp3Player(object):
         UI初始化
         """
         playUI = PlayUI(self)
-        self.uiLst = [BeginUI(self), MusicListUI(self, playUI), playUI]
+        self.uiLst = [
+            BeginUI(self),
+            MusicListUI(self, playUI),
+            playUI,
+            NetWorkUI(self),
+            Theme(),
+            ServerUi(self),
+            ClientUi(self)
+        ]
 
     def show(self):
         self.scr.fill((0, 0, 0))
@@ -277,8 +285,8 @@ class SearchBar(object):
         self.edge_rect = pygame.Rect(self.x0 - 5, self.y - 16, self.w + 10, self.h + 20)
         self.rect_detect = pygame.Rect(self.x0, self.y - 16, self.x1 - self.x0, self.h)
         self.isInput = False
-        self.textBox = TextBox(self.w, self.h - 5, self.x0, self.y + 3, self.fw.font18, callback, self.inside_clr,
-                               self.char_clr)
+        self.textBox = TextBox(self.w, self.h - 5, self.x0, self.y + 3, False, self.fw.font18, callback, self.inside_clr
+                               , self.char_clr)
 
     def mouse_motion(self, pos):
         if self.rect_detect.collidepoint(pos):
@@ -305,7 +313,8 @@ class SearchBar(object):
 
 
 class TextBox:
-    def __init__(self, w, h, x, y, font=None, callback=None, insideColor=(0, 0, 0), charColor=(255, 255, 255)):
+    def __init__(self, w, h, x, y, allow_letter=True, font=None, callback=None, insideColor=(0, 0, 0),
+                 charColor=(255, 255, 255)):
         """
         wheel from https://blog.csdn.net/qq_39687901/article/details/104684429
         :param w:文本框宽度
@@ -323,6 +332,7 @@ class TextBox:
         self.callback = callback
         self.inside_clr = insideColor
         self.char_clr = charColor
+        self.allow_letter = allow_letter
         # 创建背景surface
         self.rect = pygame.rect.Rect(self.x, self.y, w, h)
         # 如果font为None,那么效果可能不太好，建议传入font，更好调节
@@ -330,7 +340,7 @@ class TextBox:
             self.font = pygame.font.SysFont('microsoftyaheimicrosoftyaheiui', 16)
         else:
             self.font = font
-        self.dagparams = DefaultDagParams()
+        self.dagParams = DefaultDagParams()
         self.state = 0  # 0初始状态 1输入拼音状态
         self.page = 1  # 第几页
         self.limit = 5  # 显示几个汉字
@@ -431,8 +441,11 @@ class TextBox:
         if unicode != "":
             char = unicode
         else:
-            char = chr(key)
-        if char in string.ascii_letters:
+            try:
+                char = chr(key)
+            except:
+                return
+        if self.allow_letter and char in string.ascii_letters:
             self.buffer_text += char
             self.word_list = self.py2hz(self.buffer_text)
             self.create_word_list_surf()
@@ -449,7 +462,7 @@ class TextBox:
             # traceback.print_exc()
 
     def py2hz(self, pinyin):
-        result = dag(self.dagparams, (pinyin,), path_num=self.limit * self.page)[
+        result = dag(self.dagParams, (pinyin,), path_num=self.limit * self.page)[
                  (self.page - 1) * self.limit:self.page * self.limit]
         data = [item.path[0] for item in result]
         return data
@@ -909,6 +922,8 @@ class UiEnum(int, Enum):
     playUi = 2
     networkUi = 3
     themeUi = 4
+    serverUi = 5
+    clientUi = 6
 
 
 class UI(object):
@@ -944,15 +959,15 @@ class BeginUI(UI):
     def __init__(self, fWork: PygameMp3Player):
         super().__init__(fWork)
         self.btnLst.append(
-            Button(self.fw, get_resource_path("img/btn/beginUI/network.png"), SCREEN_W // 2 - 250 - 64,
+            Button(self.fw, get_resource_path("img/btn/BeginUI/network.png"), SCREEN_W // 2 - 250 - 64,
                    SCREEN_H // 2 - 64,
                    self.btn_func_jump, param=UiEnum.networkUi, scale=(128, 128)))
         self.btnLst.append(
-            Button(self.fw, get_resource_path("img/btn/beginUI/music.png"), SCREEN_W // 2 - 64, SCREEN_H // 2 - 64,
+            Button(self.fw, get_resource_path("img/btn/BeginUI/music.png"), SCREEN_W // 2 - 64, SCREEN_H // 2 - 64,
                    self.btn_func_jump,
                    param=UiEnum.musicListUi, scale=(128, 128)))
         self.btnLst.append(
-            Button(self.fw, get_resource_path("img/btn/beginUI/theme.png"), SCREEN_W // 2 + 250 - 64,
+            Button(self.fw, get_resource_path("img/btn/BeginUI/theme.png"), SCREEN_W // 2 + 250 - 64,
                    SCREEN_H // 2 - 64, self.btn_func_jump,
                    param=UiEnum.themeUi, scale=(128, 128)))
 
@@ -963,7 +978,7 @@ class BeginUI(UI):
             ui.init()
             self.fw.status = UiEnum.musicListUi
         elif status == UiEnum.networkUi:
-            print("networkUI")
+            self.fw.status = UiEnum.networkUi
         elif status == UiEnum.themeUi:
             print("skinUi")
 
@@ -976,7 +991,7 @@ class MusicListUI(UI):
         self.SINGLE_PAGE_MAX = 10
         spec_musicList = math.ceil((len(self.fw.manager.musicLst)) / self.SINGLE_PAGE_MAX)  # 每页上都会有一个”当前正在播放“对象
         self.page_all = math.ceil((spec_musicList + len(self.fw.manager.musicLst)) / self.SINGLE_PAGE_MAX)
-        if self.page_all == 0:
+        if self.page_all <= 0:
             self.page_all = 1
         self.page_all += self.page_all - spec_musicList  # 可能还会再有一页
         self.page_curr = 0
@@ -1240,6 +1255,64 @@ class PlayUI(UI):
         self.lyricDisplay.update()
 
 
+class NetWorkUI(UI):
+    def __init__(self, fWork: PygameMp3Player):
+        super().__init__(fWork)
+        self.btnLst.append(
+            Button(self.fw, get_resource_path("img/btn/NetWorkUi/server.png"), SCREEN_W // 2 - 250 - 64,
+                   SCREEN_H // 2 - 64,
+                   self.btn_func_jump,
+                   param=UiEnum.serverUi, scale=(128, 128)))
+        self.btnLst.append(
+            Button(self.fw, get_resource_path("img/btn/NetWorkUi/client.png"), SCREEN_W // 2 + 250 - 64,
+                   SCREEN_H // 2 - 64,
+                   self.btn_func_jump,
+                   param=UiEnum.clientUi, scale=(128, 128)))
+
+    def btn_func_jump(self, status):
+        if status == UiEnum.serverUi:
+            self.fw.status = UiEnum.serverUi
+        elif status == UiEnum.clientUi:
+            # self.fw.status = UiEnum.clientUi
+            print("cu")
+
+
+class ServerUi(MusicListUI):
+    def __init__(self, fWork: PygameMp3Player):
+        self.is_set = False
+        self.text_box = TextBox(60, 20, SCREEN_W // 2, SCREEN_H // 2, callback=self.call_back,
+                                insideColor=(128, 128, 128))
+        self.is_init = True
+        if len(fWork.manager.musicLst) == 0:
+            self.init()
+        self.remind_text = "端口号:"
+        self.port = -1
+        # because an init func invoke in it, so check whether it is initialed after invoking this func
+        super().__init__(fWork, PlayUI)
+
+    def call_back(self, text):
+        if int(text) <= 25565:
+            self.port = int(text)
+            self.is_set = True
+            return
+        self.remind_text = "端口号小于等于25565"
+
+    def show(self, scr: pygame.SurfaceType):
+        if self.is_set:
+            super(ServerUi, self).show(scr)
+        else:
+            scr.blit(self.fw.font16.render(self.remind_text, True, (255, 255, 255)),
+                     (SCREEN_W // 2, SCREEN_H // 2 - 25))
+            self.text_box.show(scr)
+
+    def key_down(self, event):
+        self.text_box.key_down(event)
+
+
+class ClientUi(UI):
+    pass
+
+
 """
 Lyric
 """
@@ -1331,7 +1404,7 @@ class LyricContainer(object):
     def init(self, srcPath, srcPath_tran=None):
         if srcPath_tran is not None:
             self.has_tran = True
-        self.container = get_Lyric_list(srcPath, srcPath_tran)
+        self.container = get_lyric_list(srcPath, srcPath_tran)
         self.length = len(self.container)
 
 
@@ -1417,7 +1490,7 @@ def convert_to_sec(m, s, ms):
     return m * 60 + s + ms / 1000
 
 
-def get_Lyric_list(filePath, filePath_tran=None):
+def get_lyric_list(filePath, filePath_tran=None):
     """
     获取Lyric对象的列表
     :param filePath: lrc文件路径
@@ -1494,7 +1567,7 @@ lyricPath = "lyric"
 
 
 def _do_ini_init(fName):
-    with open(ININAME, 'w', 'UTF-8') as destF:
+    with open(ININAME, 'w', encoding='UTF-8') as destF:
         config.add_section("folder")
         config.set("folder", "temp", tempPath)
         config.set("folder", "music", musicPath)
@@ -1503,7 +1576,7 @@ def _do_ini_init(fName):
 
 
 if not os.path.exists(ININAME):  # ini 不存在
-    f = open(ININAME, 'w', 'UTF-8')
+    f = open(ININAME, 'w', encoding='UTF-8')
     config.add_section("folder")
     config.set("folder", "temp", tempPath)
     config.set("folder", "music", musicPath)
