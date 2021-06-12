@@ -4,17 +4,23 @@ import configparser
 import hashlib
 import math
 import os
+import pickle
 import random
 import re
+import socket
 import string
+import struct
 import sys
 import time
 import traceback
 from enum import Enum
+from threading import Thread
+from typing import Tuple
 
 import eyed3
 import pygame
 
+import CsInfo
 from Pinyin2Hanzi import DefaultDagParams, dag
 from Theme import Theme
 
@@ -56,9 +62,10 @@ class PygameMp3Player(object):
             self.theme = Theme(skinFile)
         self.music_path = music_path
         self.lyric_path = lyric_path
-        self.manager = PlayManager(self)
-        self.manager.isEmpty = isEmpty
         self.tempPath = temp_path
+        self.manager_original = PlayManager(self)
+        self.manager = self.manager_original
+        self.manager.isEmpty = isEmpty
         self.status = UiEnum.beginUi
         # """
         # 简单的枚举当前文件夹寻找mp3文件(当然不支持递归深入查找)
@@ -80,11 +87,11 @@ class PygameMp3Player(object):
         """
         UI初始化
         """
-        playUI = PlayUI(self)
+        self.playUI = PlayUI(self)
         self.uiLst = [
             BeginUI(self),
-            MusicListUI(self, playUI),
-            playUI,
+            MusicListUI(self, self.playUI),
+            self.playUI,
             NetWorkUI(self),
             Theme(),
             ServerUi(self),
@@ -118,7 +125,8 @@ CONTROL
 
 
 class Button(object):
-    def __init__(self, fWork: PygameMp3Player, pic, x, y, btn_func, param=None, colorKey=(0, 0, 0), scale=None):
+    def __init__(self, fWork: PygameMp3Player, pic, x, y, btn_func, invisible=False, param=None, colorKey=(0, 0, 0),
+                 scale=None):
         if isinstance(pic, pygame.SurfaceType):
             self.img = pic
         else:
@@ -135,15 +143,22 @@ class Button(object):
         self.status = 0
         self.btn_func = btn_func
         self.param = param
+        self.invisible = False
 
     def show(self, scr: pygame.SurfaceType):
+        if self.invisible:
+            return
         scr.blit(self.img, (self.x, self.y), (self.status * self.rect.w, 0, self.rect.w, self.rect.h))
 
     def mouse_down(self, pos):
+        if self.invisible:
+            return
         if self.rect.collidepoint(pos):
             self.status = 1
 
     def mouse_up(self, pos):
+        if self.invisible:
+            return
         if not self.rect.collidepoint(pos) or self.status != 1:  # 必须当前按钮被按下后才有必要去执行
             self.status = 0
             return
@@ -181,11 +196,14 @@ class PlayBar(object):
 
     def display_played_logic(self, scr):
         if self.fw.manager.isPlay or self.status:  # 更新ms_hasPlayed进度, status是用来更新已经拖动进度后的
-            if self.fw.manager.currMusic.src is not None:  # 判断是否未播放过任何音乐 (fixed: 未播放时拖动进度条ms_hasPlayed显示异常时间
+            if self.fw.manager.currMusic.src != "":  # 判断是否未播放过任何音乐 (fixed: 未播放时拖动进度条ms_hasPlayed显示异常时间
                 self.fw.manager.timeManager.update()
-        if self.fw.manager.currMusic.src is not None:  # 防止被除数为0
+        if self.fw.manager.currMusic.src != "":  # 防止被除数为0
             sec_played = self.fw.manager.timeManager.ms_played / 1000
-            self.playedW = self.w // (self.sec_all / sec_played)
+            try:
+                self.playedW = self.w // (self.sec_all / sec_played)
+            except ZeroDivisionError:
+                self.playedW = 0
             pygame.draw.line(scr, self.clr_played, (self.x0, self.y), (self.x0 + self.playedW, self.y), 3)
 
     def mouse_down(self, pos, btn):
@@ -194,7 +212,7 @@ class PlayBar(object):
 
     def mouse_up(self, pos, btn):
         if self.status and self.playedW > 0:
-            if self.fw.manager.currMusic.src is not None:  # 防止 set_pos unsupported for this codec
+            if self.fw.manager.currMusic.src != "":  # 防止 set_pos unsupported for this codec
                 self._do_time_change(pos)
                 self.fw.manager.timeManager.update_location_mp3(self.sec_all / (self.w / self.playedW))
             self.status = 0
@@ -215,7 +233,7 @@ class PlayBar(object):
     def _do_time_change(self, pos):
         self.playedW = self._get_played_weight(pos)
         sec = self.sec_all / (self.w / self.playedW)  # 新的播放进度
-        self.fw.manager.timeManager.change(sec)
+        self.fw.manager.timeManager.change_lyric_location(sec)
 
 
 class VolumeBar(object):
@@ -506,8 +524,8 @@ MANAGER
 
 
 class Music(object):
-    def __init__(self, fWork: PygameMp3Player, musicPath=None, lrcPath=None, lrcTranPath=None):
-        if musicPath is None:
+    def __init__(self, fWork: PygameMp3Player, musicPath="", lrcPath=None, lrcTranPath=None):
+        if musicPath == "":
             self.src = musicPath
             self.title = "啥都没有"
             self.album = "啥都没有"
@@ -557,7 +575,7 @@ class Music(object):
             print("load lyric finished!")
 
     def get_cover_file(self):
-        if self.src is None or self.cover_data is None:
+        if self.src == "" or self.cover_data is None:
             return get_resource_path("img/None.png")
         salt = "pmp233"  # 喂 加什么盐呢? 这个不是密码加密!
         m = hashlib.md5()
@@ -584,6 +602,7 @@ class PlayManager(object):
     """
 
     def __init__(self, fWork):
+        self.is_init = False
         self.fw = fWork
         self.isEmpty = False
         self.musicLst = []  # 当前正在播放的音乐在musicLst中的下标
@@ -592,6 +611,7 @@ class PlayManager(object):
         self.currMusic = Music(fWork)  # 当前正在播放的音乐
         self.musicIndex = -1  # 当前正在播放的音乐在musicLst中的下标
         self.timeManager = MusicTimeManager(fWork)  # 时间刺客(误
+        self.hasPaused = False
 
     def play_next(self, orderNum, human_opera=True):
         """
@@ -626,9 +646,10 @@ class PlayManager(object):
     def pause(self):
         pygame.mixer.music.pause()
         self.isPlay = False
+        self.hasPaused = True
 
     def unpause(self):
-        if self.currMusic.src is not None:  # 如果什么歌都没播放 那就无视
+        if self.currMusic.src != "":  # 如果什么歌都没播放 那就无视
             pygame.mixer.music.unpause()
             self.isPlay = True
             self.timeManager.sync()
@@ -645,7 +666,7 @@ class PlayManager(object):
             while True:  # 如果随机后是重复的, 则重新随机
                 newIndex = random.randint(0, len(self.musicLst) - 1)
                 print("rand", newIndex)
-                if newIndex != self.musicIndex or len(self.fw.manager.musicLst) <= 1:  # modify in v1.3 死循环
+                if newIndex != self.musicIndex or len(self.musicLst) <= 1:  # modify in v1.3 死循环
                     break
         elif orderNum == 0 or human_opera:  # order
             newIndex = (self.musicIndex + 1) % len(self.musicLst)
@@ -661,10 +682,27 @@ class PlayManager(object):
         self.currMusic.init_lyric()
         pygame.mixer.music.load(self.currMusic.src)
         pygame.mixer.music.play()
-        self.fw.manager.beginPlayMs = get_current_time_millis()
-        self.fw.manager.timeManager.reset()
+        self.timeManager.beginPlayMs = get_current_time_millis()
+        self.timeManager.reset()
         self.fw.uiLst[UiEnum.playUi].lyricDisplay.update()
-        print("currMusic change to", self.fw.manager.currMusic.title)
+        print("currMusic change to", self.currMusic.title)
+
+    def play(self, music_obj: Music):
+        """
+        play music not in playList
+        :param music_obj: Music Obj
+        :return:
+        """
+        self.isPlay = True
+        self.currMusic = music_obj
+        self.currMusic: Music
+        self.currMusic.init_lyric()
+        pygame.mixer.music.load(self.currMusic.src)
+        pygame.mixer.music.play()
+        self.timeManager.beginPlayMs = get_current_time_millis()
+        self.timeManager.reset()
+        self.fw.uiLst[UiEnum.playUi].lyricDisplay.update()
+        print("currMusic change to", self.currMusic.title)
 
 
 class MusicTimeManager(object):
@@ -675,6 +713,7 @@ class MusicTimeManager(object):
         self.fw = fWork
         self.beginPlayMs = 0
         self.ms_played = 0
+        self.isTimeUpdated = False
 
     def sync(self):
         """
@@ -682,12 +721,12 @@ class MusicTimeManager(object):
         """
         self.beginPlayMs = get_current_time_millis() - self.ms_played
 
-    def change(self, sec):
+    def change_lyric_location(self, sec):
         """
         更改播放条歌词显示进度
         :param sec: 新的播放进度(秒数)
         """
-        ld = self.fw.uiLst[1].lyricDisplay  # 有点懒了改了,,,
+        ld = self.fw.uiLst[self.fw.status].lyricDisplay  # 有点懒了改了,,,
         self.beginPlayMs -= (sec * 1000 - self.ms_played)  # 奇妙的更新播放进度
         if ld.lyricDisplay is None:  # 没有歌词不画
             return
@@ -708,14 +747,14 @@ class MusicTimeManager(object):
         """
         self.beginPlayMs = get_current_time_millis()
 
-    @staticmethod
-    def update_location_mp3(sec):
+    def update_location_mp3(self, sec):
         """
         更改音乐播放进度(mp3)
         :param sec 位置
         """
         pygame.mixer.music.rewind()
         pygame.mixer.music.set_pos(sec)
+        self.isTimeUpdated = True
 
 
 class ThemeManager(object):
@@ -899,8 +938,8 @@ class LyricDisplay(object):
             for obj in self.lyricDisplay.containerWithPages[self.page_curr]:
                 obj.mouse_motion(pos)
 
-    def key_up(self, key):
-        if key == pygame.K_r:
+    def key_up(self, event):
+        if event.key == pygame.K_r:
             self.re_location()
 
     def re_location(self):
@@ -975,7 +1014,6 @@ class BeginUI(UI):
         if status == UiEnum.musicListUi:
             ui: MusicListUI
             ui = self.fw.uiLst[UiEnum.musicListUi]
-            ui.init()
             self.fw.status = UiEnum.musicListUi
         elif status == UiEnum.networkUi:
             self.fw.status = UiEnum.networkUi
@@ -983,8 +1021,115 @@ class BeginUI(UI):
             print("skinUi")
 
 
+class PlayUI(UI):
+    def __init__(self, fWork: PygameMp3Player):
+        super().__init__(fWork)
+        self.playInfo = PlayInfoDisplay(fWork)
+        self.lyricDisplay = LyricDisplay(fWork)
+        self.playBar = PlayBar(fWork)
+        self.volumeBar = VolumeBar(fWork)
+        # 0=order, 1=loop, 2=rand
+        self.orderNum = 0
+        """
+        control init
+        """
+        self.btnLst.append(  # 0
+            Button(self.fw, get_resource_path("img/btn/play/up.bmp"), SCREEN_W // 2 - 20, 30, self.btn_func_return))
+        self.btnLst.append(  # 1
+            Button(self.fw, get_resource_path("img/btn/play/previous.bmp"), SCREEN_W // 2 - 160, SCREEN_H - 120,
+                   self.btn_func_previous))
+        self.btnLst.append(  # 2
+            Button(self.fw, get_playPause_pic(self.fw.manager.isPlay), SCREEN_W // 2 - 30, SCREEN_H - 120,
+                   self.btn_func_pp))
+        self.btnLst.append(  # 3
+            Button(self.fw, get_resource_path("img/btn/play/next.bmp"), SCREEN_W // 2 + 100, SCREEN_H - 120,
+                   self.btn_func_next))
+        self.btnLst.append(  # 4
+            Button(self.fw, get_resource_path("img/btn/order/0.png"), SCREEN_W // 2 - 450, SCREEN_H - 120,
+                   self.btn_func_order,
+                   (255, 255, 255)))
+
+    def show(self, scr: pygame.SurfaceType):
+        scr.fill(self.fw.theme.playUi_color_bg)
+        # play next when music finished
+        if pygame.mixer_music.get_busy() == 0 and self.fw.manager.isPlay:
+            self.fw.manager.play_next(self.orderNum, False)
+            self.update()
+        self.lyricDisplay.show(scr)
+        self.playInfo.show(scr)
+        self.playBar.show(scr)
+        self.volumeBar.show(scr)
+        for b in self.btnLst:
+            b.show(scr)
+
+    def mouse_down(self, pos, btn):
+        for b in self.btnLst:
+            b.mouse_down(pos)
+        self.playBar.mouse_down(pos, btn)
+        self.volumeBar.mouse_down(pos, btn)
+        self.lyricDisplay.mouse_down(pos, btn)
+
+    def mouse_up(self, pos, btn):
+        for b in self.btnLst:
+            b.mouse_up(pos)
+        self.playBar.mouse_up(pos, btn)
+        self.volumeBar.mouse_up(pos, btn)
+        if not self.fw.manager.isEmpty:
+            self.lyricDisplay.mouse_up(pos, btn)
+
+    def mouse_motion(self, pos):
+        self.playBar.mouse_motion(pos)
+        self.volumeBar.mouse_motion(pos)
+        self.lyricDisplay.mouse_motion(pos)
+
+    def key_up(self, event):
+        self.lyricDisplay.key_up(event)
+
+    def btn_func_return(self):
+        self.fw.status = UiEnum.musicListUi
+
+    def btn_func_pp(self):
+        if self.fw.manager.isPlay:
+            self.fw.manager.pause()
+        else:
+            self.fw.manager.unpause()
+        self.btn_change()
+
+    def btn_func_previous(self):
+        if self.fw.manager.isEmpty:
+            return
+        self.fw.manager.play_previous()
+        self.update()
+
+    def btn_func_next(self):
+        if self.fw.manager.isEmpty:
+            return
+        self.fw.manager.play_next(self.orderNum)
+        self.update()
+
+    def btn_func_order(self):  # 0=order, 1=loop, 2=rand
+        self.orderNum = (self.orderNum + 1) % 3
+        self.btnLst[4].__init__(self.fw, get_resource_path("img/btn/order/" + str(self.orderNum) + ".png"),
+                                SCREEN_W // 2 - 450,
+                                SCREEN_H - 120, self.btn_func_order, (255, 255, 255))
+
+    def btn_change(self):
+        invisible = self.btnLst[2].invisible
+        self.btnLst[2].__init__(self.fw, get_playPause_pic(self.fw.manager.isPlay), SCREEN_W // 2 - 30, SCREEN_H - 120,
+                                self.btn_func_pp, invisible=invisible)
+
+    def update(self):
+        """
+        更新控件状态
+        """
+        self.btn_change()
+        self.playInfo.update()
+        self.playBar.sec_all = self.fw.manager.currMusic.second
+        self.lyricDisplay.update()
+
+
 class MusicListUI(UI):
-    def __init__(self, fWork: PygameMp3Player, playUi):
+    def __init__(self, fWork: PygameMp3Player, playUi: PlayUI):
         super().__init__(fWork)
         # 页数 = ceil(总量 / 单页可放置量)
         self.playUi = playUi
@@ -1002,10 +1147,10 @@ class MusicListUI(UI):
         self.MUSIC_OBJ_LST = []  # 用于替换musicListObjLst
         self.PAGE_ALL = self.page_all
         self.temp_page_all = 0
-        self.is_init = False
+        self.init()
         self.btnLst.append(
             Button(self.fw, pygame.transform.rotate(pygame.image.load(get_resource_path("img/btn/play/up.bmp")), 90),
-                   27, 10, self.func_goto_beginUi))
+                   27, 10, self.func_back_previous_ui))
         # LIST INIT
         i = 0
         # 这么繁琐的方式是因为有一个特殊的MusicList(当前正在播放)
@@ -1033,7 +1178,7 @@ class MusicListUI(UI):
         """
         简单的枚举当前文件夹寻找mp3文件(当然不支持递归深入查找)
         """
-        if self.is_init:
+        if self.fw.manager.is_init:
             return
         pattern = re.compile("^.*.mp3$")
         t0 = time.time()
@@ -1049,7 +1194,7 @@ class MusicListUI(UI):
                 self.fw.manager.musicLst.append(musicObj)
                 print("load: ", musicObj)
         print("用时", (time.time() - t0) * 1000, "ms")
-        self.is_init = True
+        self.fw.manager.is_init = True
 
     def show(self, scr: pygame.SurfaceType):
         scr.fill(self.fw.theme.musicListUi_color_bg)
@@ -1142,117 +1287,8 @@ class MusicListUI(UI):
             self.scrollBar.set_new_page(page_all)
             print("搜索 done!")
 
-    def func_goto_beginUi(self):
+    def func_back_previous_ui(self):
         self.fw.status = UiEnum.beginUi
-
-
-class PlayUI(UI):
-    def __init__(self, fWork: PygameMp3Player):
-        super().__init__(fWork)
-        self.playInfo = PlayInfoDisplay(fWork)
-        self.lyricDisplay = LyricDisplay(fWork)
-        self.playBar = PlayBar(fWork)
-        self.volumeBar = VolumeBar(fWork)
-        # 0=order, 1=loop, 2=rand
-        self.orderNum = 0
-        """
-        control init
-        """
-        self.btnLst.append(  # 0
-            Button(self.fw, get_resource_path("img/btn/play/up.bmp"), SCREEN_W // 2 - 20, 30, self.btn_func_return))
-        self.btnLst.append(  # 1
-            Button(self.fw, get_resource_path("img/btn/play/previous.bmp"), SCREEN_W // 2 - 160, SCREEN_H - 120,
-                   self.btn_func_previous))
-        self.btnLst.append(  # 2
-            Button(self.fw, get_playPause_pic(self.fw.manager.isPlay), SCREEN_W // 2 - 30, SCREEN_H - 120,
-                   self.btn_func_pp))
-        self.btnLst.append(  # 3
-            Button(self.fw, get_resource_path("img/btn/play/next.bmp"), SCREEN_W // 2 + 100, SCREEN_H - 120,
-                   self.btn_func_next))
-        self.btnLst.append(  # 4
-            Button(self.fw, get_resource_path("img/btn/order/0.png"), SCREEN_W // 2 - 450, SCREEN_H - 120,
-                   self.btn_func_order,
-                   (255, 255, 255)))
-
-    def show(self, scr: pygame.SurfaceType):
-        scr.fill(self.fw.theme.playUi_color_bg)
-        if pygame.mixer_music.get_busy() == 0 and self.fw.manager.isPlay:
-            self.fw.manager.play_next(self.orderNum, False)
-            self.update()
-        self.lyricDisplay.show(scr)
-        self.playInfo.show(scr)
-        self.playBar.show(scr)
-        self.volumeBar.show(scr)
-        for b in self.btnLst:
-            b.show(scr)
-
-    def mouse_down(self, pos, btn):
-        for b in self.btnLst:
-            b.mouse_down(pos)
-        self.playBar.mouse_down(pos, btn)
-        self.volumeBar.mouse_down(pos, btn)
-        self.lyricDisplay.mouse_down(pos, btn)
-
-    def mouse_up(self, pos, btn):
-        for b in self.btnLst:
-            b.mouse_up(pos)
-        self.playBar.mouse_up(pos, btn)
-        self.volumeBar.mouse_up(pos, btn)
-        if self.fw.manager.isEmpty:
-            return
-        self.lyricDisplay.mouse_up(pos, btn)
-
-    def mouse_motion(self, pos):
-        self.playBar.mouse_motion(pos)
-        self.volumeBar.mouse_motion(pos)
-        self.lyricDisplay.mouse_motion(pos)
-
-    def key_up(self, event):
-        self.lyricDisplay.key_up(event)
-
-    def btn_func_return(self):
-        self.fw.status = UiEnum.musicListUi
-
-    def btn_func_pp(self):
-        if self.fw.manager.isPlay:
-            self.fw.manager.pause()
-        else:
-            self.fw.manager.unpause()
-        self.btn_change()
-
-    def btn_func_previous(self):
-        if self.fw.manager.isEmpty:
-            return
-        self.fw.manager.play_previous()
-        self.update()
-
-    def btn_func_next(self):
-        if self.fw.manager.isEmpty:
-            return
-        self.fw.manager.play_next(self.orderNum)
-        self.update()
-
-    def btn_func_order(self):  # 0=order, 1=loop, 2=rand
-        self.orderNum = (self.orderNum + 1) % 3
-        self.btnLst[4].__init__(self.fw, get_resource_path("img/btn/order/" + str(self.orderNum) + ".png"),
-                                SCREEN_W // 2 - 450,
-                                SCREEN_H - 120, self.btn_func_order, (255, 255, 255))
-
-    def btn_func_test(self):
-        self.fw.status = UiEnum.testUi
-
-    def btn_change(self):
-        self.btnLst[2].__init__(self.fw, get_playPause_pic(self.fw.manager.isPlay), SCREEN_W // 2 - 30, SCREEN_H - 120,
-                                self.btn_func_pp)
-
-    def update(self):
-        """
-        更新控件状态
-        """
-        self.btn_change()
-        self.playInfo.update()
-        self.playBar.sec_all = self.fw.manager.currMusic.second
-        self.lyricDisplay.update()
 
 
 class NetWorkUI(UI):
@@ -1273,12 +1309,13 @@ class NetWorkUI(UI):
         if status == UiEnum.serverUi:
             self.fw.status = UiEnum.serverUi
         elif status == UiEnum.clientUi:
-            # self.fw.status = UiEnum.clientUi
-            print("cu")
+            self.fw.status = UiEnum.clientUi
 
 
 class ServerUi(MusicListUI):
+    # todo close all connections when exit current ui
     def __init__(self, fWork: PygameMp3Player):
+        self.currMusic = fWork.manager.currMusic
         self.is_set = False
         self.text_box = TextBox(60, 20, SCREEN_W // 2, SCREEN_H // 2, callback=self.call_back,
                                 insideColor=(128, 128, 128))
@@ -1287,15 +1324,71 @@ class ServerUi(MusicListUI):
             self.init()
         self.remind_text = "端口号:"
         self.port = -1
+        self.server: socket.socket = socket.socket()
+        self.client_pool = []
         # because an init func invoke in it, so check whether it is initialed after invoking this func
-        super().__init__(fWork, PlayUI)
+        super().__init__(fWork,
+                         # let the MusicListUi obj in UiList and this Ui use the same playUi
+                         fWork.playUI)
 
     def call_back(self, text):
-        if int(text) <= 25565:
+        if int(text) <= 65535:
             self.port = int(text)
             self.is_set = True
+            self.server.bind(('localhost', self.port))
+            self.server.listen(16)  # 16 max connections
+            Thread(target=self.handle_client).start()
+            print("socket start listening")
             return
-        self.remind_text = "端口号小于等于25565"
+        self.remind_text = "设置端口号请小于等于65535"
+
+    def handle_client(self):
+        # if self.fw.status != UiEnum.serverUi:
+        #     return
+        while True:
+            client, addr = self.server.accept()
+            print(addr, "joined")
+            self.client_pool.append(client)
+            # start a thread to process this client
+            Thread(target=self.handle_msg, args=(client, addr)).start()
+
+    def handle_msg(self, client: socket.socket, addr):
+        # if self.fw.status != UiEnum.serverUi:
+        #     return
+        while True:
+            req_code = client.recv(32)
+            if req_code == CsInfo.GET_MUSIC:
+                pkt = self.generate_music_data_packet()
+                client.sendall(struct.pack('l', len(pkt)))
+                client.sendall(pkt)
+                print("send music data to {} successfully, size={}bytes".format(addr[0], len(pkt)))
+            elif req_code == CsInfo.GET_MS_PLAYED:
+                client.sendall(struct.pack('qq', self.fw.manager.timeManager.ms_played, get_current_time_millis()))
+            elif req_code == CsInfo.IS_MUSIC_UPDATED:
+                if self.fw.manager.currMusic != self.currMusic:
+                    client.sendall(CsInfo.ANSWER_TRUE)
+                    self.currMusic = self.fw.manager.currMusic
+                else:
+                    client.sendall(CsInfo.ANSWER_FALSE)
+            elif req_code == CsInfo.IS_MUSIC_TIME_UPDATED:
+                if self.fw.manager.timeManager.isTimeUpdated:
+                    client.sendall(CsInfo.ANSWER_TRUE)
+                    self.fw.manager.timeManager.isTimeUpdated = False
+                else:
+                    client.sendall(CsInfo.ANSWER_FALSE)
+            elif req_code == CsInfo.CLIENT_CLOSE:
+                self.client_pool.remove(client)
+                print(addr, "left.")
+                return  # end connection
+
+    def generate_music_data_packet(self):
+        info = CsInfo.MusicInfo()
+        # wait for play music
+        while self.fw.manager.currMusic.src == "":
+            pass
+        info.music_data = open(self.fw.manager.currMusic.src, "rb").read()
+        info.ms_played = self.fw.manager.timeManager.ms_played
+        return pickle.dumps(info)
 
     def show(self, scr: pygame.SurfaceType):
         if self.is_set:
@@ -1308,9 +1401,175 @@ class ServerUi(MusicListUI):
     def key_down(self, event):
         self.text_box.key_down(event)
 
+    def func_back_previous_ui(self):
+        self.fw.status = UiEnum.networkUi
 
-class ClientUi(UI):
-    pass
+
+# todo need fix download 2 times
+class ClientUi(PlayUI):
+    def __init__(self, fWork: PygameMp3Player):
+        super().__init__(fWork)
+        self.addr = ""
+        self.port = -1
+        self.remind_text = "ip"
+        self.text_box_addr = TextBox(120, 20, SCREEN_W // 2, SCREEN_H // 2, callback=self.call_back_addr,
+                                     insideColor=(128, 128, 128))
+        self.text_box_port = TextBox(60, 20, SCREEN_W // 2 + 8, SCREEN_H // 2, callback=self.call_back_port,
+                                     insideColor=(128, 128, 128))
+        self.is_ip_set = False
+        self.is_port_set = False
+        self.server: socket.socket = socket.socket()
+        self._manager = PlayManager(fWork)
+        self.redirected = False
+        # remove music switch button
+        for i in range(len(self.btnLst) - 1, len(self.btnLst) - 4 - 1, -1):
+            self.btnLst[i].invisible = True
+
+    def show(self, scr: pygame.SurfaceType):
+        if self.fw.status == UiEnum.clientUi and not self.redirected:
+            # redirect fWork PlayManager
+            self.fw.manager = self._manager
+            self.redirected = True
+        if self.is_ip_set and self.is_port_set:
+            super().show(scr)
+        else:
+            scr.blit(self.fw.font16.render(self.remind_text, True, (255, 255, 255)),
+                     (SCREEN_W // 2, SCREEN_H // 2 - 25))
+            if self.is_ip_set:
+                self.text_box_port.show(scr)
+            else:
+                self.text_box_addr.show(scr)
+
+    def call_back_addr(self, text):
+        rt = re.search(
+            '^(25[0-5]|2[0-4][0-9]|[0-1]{1}[0-9]{2}|[1-9]{1}[0-9]{1}|[1-9])\.(25[0-5]|2[0-4][0-9]|[0-1]{1}[0-9]{'
+            '2}|[1-9]{1}[0-9]{1}|[1-9]|0)\.(25[0-5]|2[0-4][0-9]|[0-1]{1}[0-9]{2}|[1-9]{1}[0-9]{1}|[''1-9]|0)\.('
+            '25[0-5]|2[0-4][0-9]|[0-1]{1}[0-9]{2}|[1-9]{1}[0-9]{1}|[0-9])$',
+            text)
+        if rt is None:
+            self.remind_text = "IP地址不合法, 请重新键入"
+            return
+        self.addr = text
+        self.is_ip_set = True
+        self.remind_text = "端口"
+
+    def call_back_port(self, text):
+        if int(text) <= 65535:
+            self.port = int(text)
+            self.is_port_set = True
+            self.socket_init()
+            return
+        self.remind_text = "端口号小于等于65535"
+
+    def socket_init(self):
+        self.server = socket.socket()
+        self.server.connect((self.addr, self.port))
+        print("socket connect successful to {}:{}".format(self.addr, self.port))
+        Thread(target=self.handle_connection).start()
+
+    def key_down(self, event):
+        if self.is_ip_set:
+            self.text_box_port.key_down(event)
+        else:
+            self.text_box_addr.key_down(event)
+
+    def request_music_info(self) -> CsInfo.MusicInfo:
+        print("get music data from server")
+        self.server.sendall(CsInfo.GET_MUSIC)
+        lens = self.get_num(self.server.recv(struct.calcsize('l')))[0]
+        print("size=", lens)
+        print("request send successfully")
+        curr_len = 0
+        data = b''
+        while True:
+            if curr_len >= lens:
+                break
+            pkt = self.server.recv(4096000)
+            curr_len += len(pkt)
+            data += pkt
+            # if curr_len % 1048576 == 0:  # each 1MB
+            print("receiving...", curr_len, "bytes")
+        music_info = pickle.loads(data)
+        music_info: CsInfo.MusicInfo
+        print("get music data successfully, size={}".format(len(data)))
+        return music_info
+
+    @staticmethod
+    def get_num(data: bytes, fmt: str = 'l') -> Tuple[int, ...]:
+        """
+        use struct to unpack num
+        :param data: data
+        :param fmt: data format
+        :return: int value
+        """
+        return struct.unpack(fmt, data)
+
+    def handle_connection(self):
+        # time.sleep(0.5)
+        # todo add close connection when exited
+        # if False:
+        #     pass
+        music_info = self.request_music_info()
+        curr_music = self.get_music_obj(music_info)
+        self.fw.manager.play(curr_music)
+        self.update()
+        while True:
+            self.server.sendall(CsInfo.IS_MUSIC_UPDATED)
+            if self.server.recv(CsInfo.DEFAULT_RECV_SIZE) == CsInfo.ANSWER_TRUE:
+                print("music changed!")
+                music_info = self.request_music_info()
+                curr_music = self.get_music_obj(music_info)
+                self.fw.manager.play(curr_music)
+                # solve the transmission delay
+                self.fw.manager.timeManager.update_location_mp3(
+                    music_info.ms_played + (get_current_time_millis() - music_info.ts))
+                self.update()
+            else:
+                self.server.sendall(CsInfo.IS_MUSIC_TIME_UPDATED)
+                if self.server.recv(CsInfo.DEFAULT_RECV_SIZE) == CsInfo.ANSWER_TRUE or self.fw.manager.hasPaused:
+                    print("getting the playback progress from server")
+                    self.server.sendall(CsInfo.GET_MS_PLAYED)
+                    t, ts = self.get_num(self.server.recv(struct.calcsize('qq')), 'qq')  # q -> long long -> 8 bytes
+                    self.fw.manager.timeManager.update_location_mp3(t)
+                    # sync
+                    self.fw.manager.timeManager.beginPlayMs = get_current_time_millis() - t + (
+                            get_current_time_millis() - ts)
+                    print("get successful, result={}".format(t))
+                    self.fw.manager.hasPaused = False
+
+    def get_music_obj(self, data: CsInfo.MusicInfo):
+        if not os.path.exists("socket_music_data"):
+            os.makedirs("socket_music_data")
+            print("create new directory \"socket_music_data\" successfully.")
+        with open("socket_music_data/temp.mp3", "wb") as f:
+            f.write(data.music_data)
+            f.flush()
+        id3 = eyed3.load("socket_music_data/temp.mp3")
+        if not os.path.exists("socket_music_data/{}.mp3".format(id3.tag.title)):
+            os.rename("socket_music_data/temp.mp3", "socket_music_data/{}.mp3".format(id3.tag.title))
+        music_obj = Music(musicPath="socket_music_data/" + id3.tag.title + ".mp3", fWork=self.fw)
+        print("load music successfully, name={}".format(id3.tag.title))
+        return music_obj
+
+    def btn_func_return(self):
+        # revert playManager
+        self.fw.manager = self.fw.manager_original
+        self.redirected = False
+        self.fw.status = UiEnum.beginUi
+
+    def mouse_down(self, pos, btn):
+        for b in self.btnLst:
+            b.mouse_down(pos)
+        self.volumeBar.mouse_down(pos, btn)
+        # not allow to control music time. Sync to the server
+        # self.lyricDisplay.mouse_down(pos, btn)
+        # self.playBar.mouse_down(pos, btn)
+
+    def mouse_up(self, pos, btn):
+        for b in self.btnLst:
+            b.mouse_up(pos)
+        self.volumeBar.mouse_up(pos, btn)
+        # self.playBar.mouse_up(pos, btn)
 
 
 """
@@ -1437,7 +1696,7 @@ class LyricDisplayObjContainer(object):
             self.containerWithPages.append(page)
 
     def clicked_func(self, sec):
-        self.fw.manager.timeManager.change(sec)
+        self.fw.manager.timeManager.change_lyric_location(sec)
         self.fw.manager.timeManager.update_location_mp3(sec)
         self.fw.manager.timeManager.update()
 
@@ -1566,7 +1825,7 @@ musicPath = "music"
 lyricPath = "lyric"
 
 
-def _do_ini_init(fName):
+def _do_ini_init():
     with open(ININAME, 'w', encoding='UTF-8') as destF:
         config.add_section("folder")
         config.set("folder", "temp", tempPath)
