@@ -1057,9 +1057,10 @@ class MusicListUI(UI):
                             pageLst.append(MusicList(self.fw, self.playUi, y, mo.music, str(n)))
                             y += 80
                             n += 1
-            if len(pageLst) != 0:  # 如果搜索到的内容不大于1页就需要再append下
-                searchedLst.append(pageLst)
-                page_all += 1
+            # if len(pageLst) != 0:  # 如果搜索到的内容不大于1页就需要再append下
+            # FIXED: 如果没有搜索到任何东西也要添加一页 否则会out of index
+            searchedLst.append([])
+            page_all += 1
             self.page_all = page_all
             self.page_curr = 0
             self.scrollBar.page_curr = 0
