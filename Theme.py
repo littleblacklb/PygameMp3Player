@@ -1,4 +1,15 @@
 import json
+import os
+import shutil
+import sys
+
+
+def _get_resource_path(relative):
+    if hasattr(sys, "_MEIPASS"):
+        absolute_path = os.path.join(sys._MEIPASS, relative)
+    else:
+        absolute_path = os.path.join(relative)
+    return absolute_path
 
 
 class Theme:
@@ -8,7 +19,12 @@ class Theme:
         return int(lst[0]), int(lst[1]), int(lst[2])
 
     def __init__(self, filePath="theme/default.json"):
-        print(filePath)
+        print("theme path:", filePath)
+        if not os.path.exists(filePath):
+            print(filePath, "could not be found, creating now...")
+            if not os.path.exists("theme"):
+                os.mkdir("theme")
+            shutil.copyfile(_get_resource_path("theme/default.json"), "theme/default.json")
         JSON_OBJ = json.load(open(filePath, "r"))
         # musicListUi
         self.musicListUi_color_bg = Theme.to_color(JSON_OBJ["musicListUi"]["color"]["background"])
