@@ -153,7 +153,7 @@ class PlayBar(object):
         pygame.draw.line(scr, self.clr_line, (self.x0, self.y), (self.x1, self.y), 3)
         self.display_played_logic(scr)
         textSurface = self.fw.font18.render(convert_to_minute(self.fw.manager.timeManager.ms_played // 1000),
-                                    True, self.clr_font_left)
+                                            True, self.clr_font_left)
         scr.blit(textSurface, (self.x0 - 65, self.y - 16))
         textSurface = self.fw.font18.render(convert_to_minute(self.sec_all), True, self.clr_font_right)
         scr.blit(textSurface, (self.x1 + 25, self.y - 16))
@@ -415,10 +415,13 @@ class TextBox:
             self.page = 1
             return
 
-        if unicode != "":
-            char = unicode
-        else:
-            char = chr(key)
+        try:
+            if unicode != "":
+                char = unicode
+            else:
+                char = chr(key)
+        except ValueError:
+            return
         if char in string.ascii_letters:
             self.buffer_text += char
             self.word_list = self.py2hz(self.buffer_text)
@@ -940,12 +943,13 @@ class MusicListUI(UI):
         super().__init__(fWork)
         # 页数 = ceil(总量 / 单页可放置量)
         self.playUi = playUi
-        self.SINGLE_PAGE_MAX = 10
-        spec_musicList = math.ceil((len(self.fw.manager.musicLst)) / self.SINGLE_PAGE_MAX)  # 每页上都会有一个”当前正在播放“对象
-        self.page_all = math.ceil((spec_musicList + len(self.fw.manager.musicLst)) / self.SINGLE_PAGE_MAX)
+        self.SINGLE_PAGE_MAX = 9
+        # spec_musicList = math.ceil(len(self.fw.manager.musicLst) / self.SINGLE_PAGE_MAX)  # 每页上都会有一个”当前正在播放“对象
+        # self.page_all = math.ceil((len(self.fw.manager.musicLst)) / self.SINGLE_PAGE_MAX)
+        self.page_all = math.ceil(len(self.fw.manager.musicLst) / self.SINGLE_PAGE_MAX)
         if self.page_all == 0:
             self.page_all = 1
-        self.page_all += self.page_all - spec_musicList  # 可能还会再有一页
+        # self.page_all += self.page_all - spec_musicList  # 可能还会再有一页
         self.page_curr = 0
         self.musicListObjLst = []
         self.specMusicListObj = SpecialMusicList(self.fw, playUi)
@@ -973,7 +977,7 @@ class MusicListUI(UI):
             self.musicListObjLst.append(page)
             a: MusicList
             # self.btnLst.append(page_btn)
-            self.MUSIC_OBJ_LST = self.musicListObjLst[:]
+        self.MUSIC_OBJ_LST = self.musicListObjLst[:]
 
     def show(self, scr: pygame.SurfaceType):
         scr.fill(self.fw.theme.musicListUi_color_bg)
@@ -1024,7 +1028,7 @@ class MusicListUI(UI):
         self.searchBar.key_down(event)
 
     def func_search(self, content: str):
-        print("func_search 调用")
+        # print("func_search 调用")
         if content == "":  # 当搜索为空时，默认为还原列表
             print("还原列表")
             self.musicListObjLst = self.MUSIC_OBJ_LST[:]
@@ -1397,11 +1401,10 @@ def _no_bug_plz():
         print("尻文件不见了 还我神兽 o(╥﹏╥)o\n")
 
 
-def check_file(temp_path, music_path, lyric_path):
+def check_file(folderLst: list):
     """
     检查文件夹存在性
     """
-    folderLst = [temp_path, music_path, lyric_path]
     for name in folderLst:
         if not os.path.exists(name):
             os.makedirs(name)
@@ -1436,7 +1439,7 @@ def _do_ini_init(fName):
 
 
 if not os.path.exists(ININAME):  # ini 不存在
-    f = open(ININAME, 'w', 'UTF-8')
+    f = open(ININAME, 'w', encoding='UTF-8')
     config.add_section("folder")
     config.set("folder", "temp", tempPath)
     config.set("folder", "music", musicPath)
@@ -1450,12 +1453,12 @@ else:
         musicPath = config.get("folder", "music")
         lyricPath = config.get("folder", "lyric")
     except configparser.NoSectionError:
-        print("some sections are gone in PygameMp3Player.ini, plz check or remove file and run the program")
+        print("Some sections are gone in PygameMp3Player.ini, plz check or remove file and run the program.")
         sys.exit()
     except configparser.NoOptionError:
-        print("some options are gone in PygameMp3Player.ini, plz check or remove file and run the program")
+        print("Some options are gone in PygameMp3Player.ini, plz check or remove file and run the program.")
         traceback.print_exc()
-check_file(tempPath, musicPath, lyricPath)
+check_file([tempPath, musicPath, lyricPath])
 
 pmp = PygameMp3Player(tempPath, musicPath, lyricPath, len(os.listdir(musicPath)) == 0)
 print("共有歌曲数: ", len(pmp.manager.musicLst))
