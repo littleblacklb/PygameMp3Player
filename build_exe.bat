@@ -1,2 +1,1 @@
-@pyinstaller PygameMp3Player.spec --paths "C:\Program Files\Python37\Lib\site-packages"
-@pause
+@pyinstaller PygameMp3Player.spec --paths "D:\Python\Environment\python 3.9.6\Lib\site-packages"
