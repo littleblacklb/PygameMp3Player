@@ -1,8 +1,8 @@
 import string
 
 import pygame
-from Pinyin2Hanzi import DefaultDagParams
-from Pinyin2Hanzi import dag
+from Project.Pinyin2Hanzi import DefaultDagParams
+from Project.Pinyin2Hanzi import dag
 
 
 # https://blog.csdn.net/qq_39687901/article/details/104684429

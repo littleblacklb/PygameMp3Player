@@ -1393,7 +1393,7 @@ def get_Lyric_list(filePath, filePath_tran=None):
 
 def _no_bug_plz():
     try:
-        noBug = open("NOBUG.txt", encoding='UTF-8')
+        noBug = open("../NOBUG.txt", encoding='UTF-8')
         noBugLineLst = noBug.readlines()
         for s in noBugLineLst:
             print(s, end='')

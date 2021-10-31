@@ -26,4 +26,4 @@ def get_lyric_dict(filePath):
     return dt
 
 
-print(get_lyric_dict("lyric/kobasolo,春茶 - 夏恋慕.lrc"))
+print(get_lyric_dict("../lyric/kobasolo,春茶 - 夏恋慕.lrc"))
