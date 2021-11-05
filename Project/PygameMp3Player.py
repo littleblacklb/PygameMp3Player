@@ -867,6 +867,7 @@ class LyricDisplay(object):
         if self.lyricDisplay is None:  # 如果不存在不执行以下操作
             return
         self.page_curr = 0
+        self.has_play_page = 0
         self.scrollBar.set_new_page(self.lyricDisplay.page_all)
 
     def mouse_down(self, pos, btn):
