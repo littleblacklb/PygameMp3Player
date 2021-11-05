@@ -1,5 +1,5 @@
 # coding=utf-8
-
+import base64
 import configparser
 import hashlib
 import math
@@ -16,6 +16,7 @@ import eyed3
 import pygame
 
 from Pinyin2Hanzi import DefaultDagParams, dag
+from Project import Util
 from Theme import Theme
 
 SCREEN_W, SCREEN_H = 1024, 768
@@ -57,6 +58,7 @@ class PygameMp3Player(object):
         self.manager = PlayManager(self)
         self.manager.isEmpty = isEmpty
         self.tempPath = temp_path
+        self.lrcPath = lyricPath
         self.status = UiEnum.musicListUi
         """
         简单的枚举当前文件夹寻找mp3文件(当然不支持递归深入查找)
@@ -66,12 +68,17 @@ class PygameMp3Player(object):
         for name in os.listdir(music_path):
             if pattern.match(name) is not None:  # 匹配是否为mp3
                 lrcFile, lrcTranFile = None, None
-                lrcName = name.split('.')[0]
-                if os.path.exists(lyric_path + "/" + lrcName + ".lrc"):
-                    lrcFile = lyric_path + "/" + lrcName + ".lrc"
-                    if os.path.exists(lyric_path + "/" + lrcName + "_tran.lrc"):
-                        lrcTranFile = lyric_path + "/" + lrcName + "_tran.lrc"
-                musicObj = Music(self, music_path + "/" + name, lrcFile, lrcTranFile)
+                musicObj = Music(self, music_path + "/" + name)
+                for fn in (name.split('.')[0],
+                           musicObj.title,
+                           base64.b64encode(musicObj.title.encode()).decode().replace('/', '_')
+                           ):
+                    if os.path.exists(lyric_path + "/" + fn + ".lrc"):
+                        lrcFile = lyric_path + "/" + fn + ".lrc"
+                        if os.path.exists(lyric_path + "/" + fn + "_tran.lrc"):
+                            lrcTranFile = lyric_path + "/" + fn + "_tran.lrc"
+                musicObj.lrcPath = lrcFile
+                musicObj.lrcTranPath = lrcTranFile
                 self.manager.musicLst.append(musicObj)
                 print("load: ", musicObj)
         print("用时", (time.time() - t0) * 1000, "ms")
@@ -525,7 +532,31 @@ class Music(object):
         self.lrcTranPath = lrcTranPath
 
     def init_lyric(self):
-        # lycPath = "lyric/" + self.fileName
+        # Try to get lyric on netease music
+        if musicPath is not None and self.lrcPath is None:
+            print(self.title, ": no lyric on the disk, try to get from netease music...", sep='')
+            song_id = Util.get_song_id(self.title)
+            title = self.title
+            # If it is succeed in getting the possible same music on the netease music
+            regex = re.compile("[^*|\\:\"<>?/]+\\.[^*|\\:\"<>?/\u4E00-\u9FA5]+")
+            if regex.match(self.title) is None:  # invalid file name
+                title = base64.b64encode(self.title.encode()).decode()
+                title = title.replace('/', '_')
+            if song_id != -1:
+                print(self.title, ": get song id successful, get lyric..., song_id={}".format(song_id), sep='')
+                lrc, tran_lrc = Util.get_lyric_text(song_id)
+                with open(self.fw.lrcPath + "/{}.lrc".format(title), "w", encoding="utf-8") as f1:
+                    f1.write(lrc)
+                    f1.flush()
+                self.lrcPath = self.fw.lrcPath + "/{}.lrc".format(title)
+                print(self.title, ": Get lyric successful.", sep='')
+                if lrc != "":
+                    if tran_lrc != "":
+                        with open(self.fw.lrcPath + "/{}_tran.lrc".format(title), "w", encoding="utf-8") as f2:
+                            f2.write(tran_lrc)
+                            f2.flush()
+                        self.lrcTranPath = self.fw.lrcPath + "/{}_tran.lrc".format(title)
+                        print(self.title, ": Get the translated lyric successful.", sep='')
         if not self.isLyricInit and musicPath is not None and self.lrcPath is not None:
             self.lyric = LyricContainer()
             self.lyric.init(self.lrcPath, self.lrcTranPath)
@@ -877,7 +908,7 @@ class LyricDisplay(object):
                 obj.mouse_motion(pos)
 
     def key_up(self, key):
-        if key == pygame.K_r:
+        if key.key == pygame.K_r:
             self.re_location()
 
     def re_location(self):
@@ -1057,9 +1088,12 @@ class MusicListUI(UI):
                             pageLst.append(MusicList(self.fw, self.playUi, y, mo.music, str(n)))
                             y += 80
                             n += 1
-            # if len(pageLst) != 0:  # 如果搜索到的内容不大于1页就需要再append下
+            if len(pageLst) != 0:  # 如果搜索到的内容不大于1页就需要再append下
+                searchedLst.append(pageLst)
             # FIXED: 如果没有搜索到任何东西也要添加一页 否则会out of index
-            searchedLst.append([])
+            # searchedLst必须有一页
+            elif len(searchedLst) == 0:
+                searchedLst.append([])
             page_all += 1
             self.page_all = page_all
             self.page_curr = 0
@@ -1371,7 +1405,6 @@ def get_Lyric_list(filePath, filePath_tran=None):
         lines_tran = fObj.readlines()
         fObj.close()
     ansLst = []
-    i = 0
     for line in lines:  # 以主歌词为基准
         temp: tuple = get_lrc_time_text(line)
         if temp is None:
@@ -1379,16 +1412,22 @@ def get_Lyric_list(filePath, filePath_tran=None):
         m, s, ms, text = temp
         text = text.rstrip("\n")
         sec = convert_to_sec(m, s, ms)
-
-        if lines_tran is not None:
-            text_tran = get_lrc_time_text(lines_tran[i])[3]
-            text_tran = text_tran.rstrip("\n")
-        else:  # 如果主歌词为空行(比如: [xx:xx.xx] ) 那么副歌词可能就不会有相关行, 导致不同步 (网易云歌词格式) 详见 lyric/Reference(_tran).lrc文件
-            ansLst.append(Lyric(sec, text))
-            continue
-        ansLst.append(Lyric(sec, text, text_tran))
-        i += 1
-    return ansLst
+        ansLst.append(Lyric(sec, text))
+    if lines_tran is not None:
+        tran_lyc_map = {}
+        for line in lines_tran:
+            temp: tuple = get_lrc_time_text(line)
+            if temp is None:
+                continue
+            m, s, ms, text = temp
+            text = text.rstrip("\n")
+            sec = convert_to_sec(m, s, ms)
+            tran_lyc_map[sec] = text
+        for i in range(len(ansLst)):
+            sec = ansLst[i].sec
+            if tran_lyc_map.__contains__(sec):
+                ansLst[i].text_tran = tran_lyc_map[sec]
+    return [Lyric(0, "NULL")] if len(ansLst) == 0 else ansLst
 
 
 def _no_bug_plz():
