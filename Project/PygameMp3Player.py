@@ -16,7 +16,7 @@ import eyed3
 import pygame
 
 from Pinyin2Hanzi import DefaultDagParams, dag
-from Project import Util
+import Util
 from Theme import Theme
 
 SCREEN_W, SCREEN_H = 1024, 768
